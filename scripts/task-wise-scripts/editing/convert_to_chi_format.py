@@ -6,7 +6,7 @@ Usage:
     python convert_to_chi_format.py <results_file.jsonl> <problem_file.jsonl> <output.csv> [language]
 
 Example:
-    python convert_to_chi_format.py llama_python_samples.jsonl_results.jsonl edit_eval_python.jsonl llama_chi_input.csv python
+    python convert_to_chi_format.py llama_python_samples.jsonl_results.jsonl edit_eval_python.jsonl llama_python_chi.csv python
 """
 
 import json
@@ -75,17 +75,14 @@ def convert_to_chi_format(results_file, problem_file, output_file, language=None
         print(f"Warning: Problem file {problem_file} not found. Using placeholder test cases.")
         problems = {}
     
-    # Derive sample file path from results file (remove _results.jsonl suffix)
     sample_file = str(results_file).replace('_results.jsonl', '')
     print(f"Sample file: {sample_file}")
     
-    # Load samples (for generated code)
     samples = {}
     with open(sample_file, 'r', encoding='utf-8') as f:
         for line in f:
             if line.strip():
                 sample = json.loads(line)
-                # Code can be in 'code', 'output', or 'completion' field
                 code = sample.get('code') or sample.get('output') or sample.get('completion', '')
                 samples[sample['task_id']] = code
     
@@ -101,21 +98,16 @@ def convert_to_chi_format(results_file, problem_file, output_file, language=None
     
     print(f"Loaded {len(results)} results")
     
-    # Convert to CHI format
     rows = []
     for result in results:
         task_id = result['task_id']
         
-        # Get code from samples file
         code = samples.get(task_id, '')
         
-        # Get test code and context
         if task_id in problems:
             problem = problems[task_id]
             test_code = problem.get('test', '')
             
-            # Apply context if present (e.g., class wrapper for method snippets)
-            # Then, for Java, always inject edited_code to mirror evaluation_java behavior
             if 'context' in problem and CODE_MARKER in problem['context']:
                 if "edited_code =" not in problem['context'] or str(language).lower() != 'java':
                         code = problem['context'].replace(CODE_MARKER, code)
@@ -126,7 +118,6 @@ def convert_to_chi_format(results_file, problem_file, output_file, language=None
                 if str(language).lower() == 'java':
                     code = inject_edited_code_java(code)
         else:
-            # Empty test if problem not found
             test_code = ""
 
         
@@ -134,11 +125,8 @@ def convert_to_chi_format(results_file, problem_file, output_file, language=None
             'language': language,
             'code': code,
             'test_code': test_code,
-            # 'assert_passed': result.get('assert_passed', 0),
-            # 'assert_total': result.get('assert_total', 0)
         })
     
-    # Write CSV
     fieldnames = ['language', 'code', 'test_code']
 
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
@@ -163,7 +151,7 @@ def main():
         print("  language           - Optional: python, cpp, or java (auto-detected if not provided)")
         print()
         print("Example:")
-        print("  python convert_to_chi_format.py llama_python_samples.jsonl_results.jsonl edit_eval_python.jsonl llama_chi.csv python")
+        print("  python convert_to_chi_format.py llama_python_samples.jsonl_results.jsonl edit_eval_python.jsonl llama_python_chi.csv python")
         sys.exit(1)
     
     results_file = sys.argv[1]

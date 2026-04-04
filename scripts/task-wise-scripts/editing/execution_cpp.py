@@ -6,10 +6,6 @@ from typing import Dict, Optional
 
 import psutil
 
-"""
-Note: Removed unused time_limit helper and related signal/contextlib imports.
-Timeouts are handled via subprocess communicate() with a timeout.
-"""
 
 def check_correctness_cpp(problem: Dict, code: str, timeout: float, run_id: Optional[int] = None) -> Dict:
     """

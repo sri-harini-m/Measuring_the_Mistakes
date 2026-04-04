@@ -1,11 +1,8 @@
 import pandas as pd
-import tempfile
 import os
 import json
-import math
 import sys
 import re
-import lizard
 import logging
 import ast
 from typing import Optional, List
@@ -305,9 +302,6 @@ def categorize_error(error_msg, language):
 
 def calculate_hallucination_breakdown(errors_dict, language, total):
     """Calculate breakdown of errors into 8 hallucination subcategories."""
-    # errors_dict already has categorized error names as keys
-    # (e.g., "Data_Compliance_Hallucination", "Identification_Hallucination", etc.)
-    # So we just need to count them directly
 
     hallucination_breakdown = {}
 
@@ -542,7 +536,6 @@ def _get_logical_operators(node, code_bytes: bytes, language: str) -> List[str]:
                     break
 
             if op_child is not None:
-                # In-order: left subtree, operator, right subtree
                 for child in children[:op_idx]:
                     visit(child)
                 op_text = code_bytes[op_child.start_byte:op_child.end_byte].decode("utf-8", errors="ignore")
@@ -780,8 +773,6 @@ def _sonar_style_cognitive_complexity(code: str, language: str) -> int:
             for child in node.children:
                 visit(child)
         elif is_control_no_nesting:
-            # Only +1 for a plain else; skip if this is part of an else-if chain
-            # (the child if_statement will carry the +1 via _is_else_if).
             if not _else_is_part_of_else_if(node, language):
                 complexity += 1
             for child in node.children:
@@ -892,7 +883,6 @@ def compute_chi(csv_path):
     if N == 0:
         raise ValueError("CSV file is empty")
 
-    # Load model results JSONL for this CSV
     results_path = _derive_model_results_path(csv_path)
     if not os.path.exists(results_path):
         raise FileNotFoundError(f"Expected results file not found: {results_path}")
@@ -903,7 +893,6 @@ def compute_chi(csv_path):
 
     print(f"Processing {N} code samples...\n")
 
-    # Track rates per sample (1 if sample had that category, 0 otherwise)
     pM_count = pN_count = pR_count = pL_count = 0
     syntax_error_count = time_error_count = unknown_error_count = 0
 
@@ -921,7 +910,7 @@ def compute_chi(csv_path):
     overall_passed_problems = 0
     overall_total_asserts = 0
     overall_passed_asserts = 0
-    overall_tcpr_sum = 0.0  # Sum of per-sample assert pass rates (assert_passed/assert_total)
+    overall_tcpr_sum = 0.0 
     failed_ids = []
 
     for sample_num, (idx, row) in enumerate(df.iterrows(), start=1):
@@ -932,7 +921,6 @@ def compute_chi(csv_path):
         datapoint_id = row.get("task_id") or row.get("id") or idx
         test_code = row.get("test_code", "")
 
-        # Initialize language stats
         if language not in language_stats:
             language_stats[language] = {
                 'total_problems': 0,
@@ -950,10 +938,8 @@ def compute_chi(csv_path):
                 'errors_dict': {},
             }
 
-        # Pull matching result row (by index)
         result_row = model_results[idx] if idx < len(model_results) else {}
 
-        # Extract assert stats and errors from results file
         assert_total = int(result_row.get("assert_total", 0) or 0)
         assert_passed = int(result_row.get("assert_passed", 0) or 0)
         passed_flag = bool(result_row.get("passed", False))
@@ -961,12 +947,10 @@ def compute_chi(csv_path):
         if not isinstance(error_list, list):
             error_list = [str(error_list)]
 
-        # Extract time and memory from results file (not from execution)
         raw_t = float(result_row.get("exec_time_s", 0.0) or 0.0)
         m = float(result_row.get("peak_mem_mb", 0.0) or 0.0)
         observed_assert_total = int(result_row.get("observed_assert_total", assert_total) or 0)
 
-        # Time is normalized per observed assert; ignore sample time if observed asserts is 0 or time is 0.
         if raw_t > 0.0 and observed_assert_total > 0:
             t = raw_t / observed_assert_total
             time_per_assert_values.append(t)
@@ -974,7 +958,6 @@ def compute_chi(csv_path):
         else:
             t = None
 
-        # Avoid zero totals: if nothing recorded, fall back to a single-assert view
         if assert_total <= 0:
             assert_total = 1
             assert_passed = 1 if passed_flag else 0
@@ -982,7 +965,6 @@ def compute_chi(csv_path):
         pass_rate = assert_passed / assert_total if assert_total > 0 else 0.0
         overall_tcpr_sum += pass_rate
 
-        # Build error dict: categorize each error in the list (count all occurrences, not unique)
         errors_dict = {}
         if error_list:
             for err in error_list:
@@ -990,7 +972,6 @@ def compute_chi(csv_path):
                 category = categorize_error(err_msg, language)
                 errors_dict[category] = errors_dict.get(category, 0) + 1
         else:
-            # If some asserts failed but no messages, attribute to unknown
             if assert_passed < assert_total:
                 errors_dict["Unknown"] = 1
 
@@ -1000,7 +981,6 @@ def compute_chi(csv_path):
         cyc_vals.append(cyc_raw)
         cog_vals.append(cog_raw)
 
-        # Update counts (problem-level and assert-level)
         language_stats[language]['total_problems'] += 1
         language_stats[language]['passed_problems'] += 1 if assert_passed == assert_total else 0
         language_stats[language]['total_asserts'] += assert_total
@@ -1031,13 +1011,11 @@ def compute_chi(csv_path):
             "errors_dict": errors_dict,
         })
 
-        # Categorize errors for this sample (per-problem presence)
         if errors_dict:
-            num_errors = 1  # Count per problem, not per test case (matches chi_script.py)
+            num_errors = 1 
             sample_breakdown = calculate_hallucination_breakdown(errors_dict, language, num_errors)
             sample_categories = calculate_category_rates(errors_dict, num_errors)
 
-            # Problem-level category flags
             if sample_categories['Mapping_Hallucination']['count'] > 0:
                 pM_count += 1
                 language_stats[language]['pM_count'] += 1
@@ -1061,17 +1039,13 @@ def compute_chi(csv_path):
                 unknown_error_count += 1
                 language_stats[language]['unknown_error_count'] += 1
 
-            # Aggregate per-problem presence into language/global stats (cap at 1 per category per problem)
             for halu_type in sample_breakdown:
                 language_stats[language]['errors_dict'][halu_type] = language_stats[language]['errors_dict'].get(halu_type, 0) + 1
                 overall_errors_dict[halu_type] = overall_errors_dict.get(halu_type, 0) + 1
 
         print()
 
-    # --- Aggregate results ---
     has_valid_times = len(time_per_assert_values) > 0
-    # Use 5th/95th percentile bounds so a single extreme outlier does not collapse
-    # the entire normalization scale (min-max is outlier-sensitive by design).
     if has_valid_times:
         t_min = float(np.percentile(time_per_assert_values, 5))
         t_max = float(np.percentile(time_per_assert_values, 95))
@@ -1101,7 +1075,6 @@ def compute_chi(csv_path):
         else:
             Q_vals_failed.append(q_val)
 
-    # Calculate hallucination rates (problem-level)
     pM = pM_count / N if N > 0 else 0
     pN = pN_count / N if N > 0 else 0
     pR = pR_count / N if N > 0 else 0
@@ -1111,7 +1084,6 @@ def compute_chi(csv_path):
 
     lambda_ = 1.0
 
-    # Calculate final hallucination scores
     Hm = pM
     Hn = pN
     mean_s = float(np.mean(S_vals)) if len(S_vals) > 0 else 0.0
@@ -1130,7 +1102,6 @@ def compute_chi(csv_path):
 
     CHI = 0.25 * (Hm + Hn + HR + HL)
 
-    # Language-level breakdowns (match chi_script_updated.py representation)
     language_hallucination_stats = {}
     for lang, stats in language_stats.items():
         total_probs = stats['total_problems']
@@ -1155,7 +1126,6 @@ def compute_chi(csv_path):
                 'unknown_error_rate': stats['unknown_error_count'] / total_probs,
             }
 
-    # Overall hallucination breakdown (across all languages)
     overall_hallucination_breakdown = {}
     if overall_total_problems > 0:
         for lang, stats in language_stats.items():
@@ -1175,7 +1145,6 @@ def compute_chi(csv_path):
     overall_category_rates = calculate_category_rates(overall_errors_dict, overall_total_problems)
     overall_tcpr = overall_tcpr_sum / N if N > 0 else 0.0
 
-    # Save failed IDs
     csv_name = os.path.splitext(os.path.basename(csv_path))[0]
     failed_ids_file = f"{csv_name}_failed_ids.txt"
     with open(failed_ids_file, 'w', encoding='utf-8') as f:

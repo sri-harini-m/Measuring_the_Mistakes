@@ -50,15 +50,6 @@ def build_test_class(method_code: str, test_code: str) -> str:
 
 def instrument_java_tests(test_code: str) -> str:
     """Transform Java test lines to count passes without aborting on first failure.
-    Lines like 'if (!condition) throw new AssertionError(...)' are converted to
-    'if (condition) __ASSERT_PASSED++;' to directly count passing assertions.
-    Lines like 'if (condition) throw new AssertionError(...)' are converted to
-    'if (!(condition)) __ASSERT_PASSED++;' to negate and count passes.
-    Special handling for try-catch blocks and for-loops.
-    Other lines are kept as-is. Indentation is set for inclusion inside the main method.
-    
-    IMPORTANT: Now also increments __ASSERT_TOTAL for every assertion check to get accurate totals.
-    Also captures error messages in __ASSERT_ERRORS list for granular failure tracking.
     """
     out_lines = []
     in_try_block = False

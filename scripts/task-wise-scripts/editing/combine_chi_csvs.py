@@ -24,13 +24,11 @@ def combine_chi_csvs(prefix, output_file=None):
     print(f"  - {cpp_file}")
     print(f"  - {java_file}")
     
-    # Check if files exist
     for file in [python_file, cpp_file, java_file]:
         if not os.path.exists(file):
             print(f"Error: {file} not found!")
             return
     
-    # Read CSV files
     df_python = pd.read_csv(python_file)
     df_cpp = pd.read_csv(cpp_file)
     df_java = pd.read_csv(java_file)
@@ -40,13 +38,11 @@ def combine_chi_csvs(prefix, output_file=None):
     print(f"  - C++: {len(df_cpp)} rows")
     print(f"  - Java: {len(df_java)} rows")
     
-    # Combine all dataframes
     combined_df = pd.concat([df_python, df_cpp, df_java], ignore_index=True)
     
     print(f"\nCombined: {len(combined_df)} rows total")
     print(f"Columns: {list(combined_df.columns)}")
     
-    # Save to output file
     combined_df.to_csv(output_file, index=False)
     print(f"\nSuccessfully saved to: {output_file}")
 

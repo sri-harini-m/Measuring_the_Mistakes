@@ -50,11 +50,6 @@ def strip_code_block(code: str) -> str:
 
 
 def inject_edited_code_java(code: str) -> str:
-    """
-    Injects the 'edited_code' variable into the Java class as a static string field.
-    This is required because the Java tests expect 'edited_code' to be available,
-    similar to how it is in Python and C++.
-    """
     escaped_code = code.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
     
     last_brace = code.rfind("}")

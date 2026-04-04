@@ -74,7 +74,6 @@ def evaluate_functional_correctness_cpp(
     
     run_results = defaultdict(list)
     
-    # Sequential execution
     for sample in tqdm.tqdm(samples):
         task_id = sample["task_id"]
         code = sample.get("output") or sample.get("completion", "")
@@ -84,9 +83,7 @@ def evaluate_functional_correctness_cpp(
         res = check_correctness_cpp(problem, code, timeout, None)
         run_results[(task_id, code)].append(res)
     
-    # Process aggregated results
     for (task_id, code), res_list in run_results.items():
-            # Use first run for assert counts and pass/fail
             res = res_list[0]
             passed = res["passed"]
             
@@ -94,36 +91,24 @@ def evaluate_functional_correctness_cpp(
             assert_passed = res.get("assert_passed", 0)
             observed_assert_total = assert_total
             
-            # Special handling for EditEval/37 - meta-testing pattern with implicit assertions
-            # This test validates that a test function works by checking:
-            # 1. Correct candidate should NOT throw (implicit assertion)
-            # 2. Incorrect candidate SHOULD throw (implicit assertion)
             if task_id == "EditEval/37":
-                # The test has 2 implicit assertions based on try-catch blocks and return codes
-                # Parse stderr to determine which assertions passed
                 stderr = res.get("error", [])
                 stderr_text = "\n".join(stderr) if isinstance(stderr, list) else str(stderr)
                 
-                # Count implicit assertions
                 assert_total = 2
                 assert_passed = 0
                 
-                # Check if correct candidate passed (no "Correct candidate failed" message)
                 if "Correct candidate failed" not in stderr_text:
                     assert_passed += 1
                 
-                # Check if incorrect candidate properly threw (no "did not throw" message)
                 if "did not throw as expected" not in stderr_text:
                     assert_passed += 1
                 
-                # Override passed status based on implicit assertions
                 passed = (assert_passed == assert_total)
             
-            # If code crashed and assert_total is 0 or incomplete, use expected value from metrics
-            # This handles cases where code crashes before all assertions execute
+
             if not passed and task_id in expected_assert_totals:
                 expected_total = expected_assert_totals[task_id]
-                # Use expected total if it's greater than what we captured (code crashed mid-execution)
                 if expected_total > assert_total:
                     assert_total = expected_total
             
@@ -161,7 +146,6 @@ def evaluate_functional_correctness_cpp(
     pass_rate = correct.sum() / total.sum() if total.sum() > 0 else 0
     hallucination_rate = 1.0 - pass_rate
     
-    # Compute TCPR (Test Case Passing Rate)
     tcpr_sum = 0.0
     per_datapoint_count = 0
     for task_id in results:
