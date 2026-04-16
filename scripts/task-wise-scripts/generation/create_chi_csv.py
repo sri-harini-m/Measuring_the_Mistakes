@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""Combine per-model CHI CSVs into one file.
-
-Rules:
-1) Read input CSVs from chi_csv/.
-2) If both <model>_results_chi.csv and <model>_results_clean_chi.csv exist,
-   use the clean file for that model.
-3) Add a model_name column to each output row.
-"""
-
 import csv
 import re
 import sys
@@ -19,7 +9,6 @@ CLEAN_RE = re.compile(r"^(?P<model>.+?)_results_clean_chi\.csv$")
 
 
 def configure_csv_field_limit():
-    """Raise csv field size limit to support very large code cells."""
     max_int = sys.maxsize
     while True:
         try:
@@ -30,7 +19,6 @@ def configure_csv_field_limit():
 
 
 def discover_model_files(chi_dir: Path):
-    """Return mapping of model -> chosen CSV path, preferring clean files."""
     candidates = {}
 
     for path in chi_dir.glob("*_chi.csv"):

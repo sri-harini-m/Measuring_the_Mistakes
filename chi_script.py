@@ -1,6 +1,7 @@
 import pandas as pd
 import subprocess
 import tempfile
+from collections import defaultdict
 import os
 import time
 import psutil
@@ -42,10 +43,6 @@ except ImportError:
     TREE_SITTER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-
-# -------------------------
-# Tree-sitter node type sets (cognitive complexity)
-# -------------------------
 
 CONTROL_NODES_WITH_NESTING = {
     "java": {
@@ -116,10 +113,6 @@ CONDITION_BEARING_NODES = {
     },
 }
 
-# -------------------------
-# Hallucination category definitions
-# -------------------------
-
 HALLUCINATION_CATEGORIES = {
     'Mapping_Hallucination': [
         'Data_Compliance_Hallucination',
@@ -146,10 +139,6 @@ HALLUCINATION_CATEGORIES = {
 }
 
 MAIN_CATEGORIES = ['Mapping_Hallucination', 'Naming_Hallucination', 'Resource_Hallucination', 'Logical_Hallucination']
-
-# -------------------------
-# Language-specific error patterns
-# -------------------------
 
 programming_halus_cpp = {
     "Data_Compliance_Hallucination": {
@@ -280,13 +269,7 @@ programming_halus_java = {
     }
 }
 
-
-# =========================
-# Error categorization utilities
-# =========================
-
 def categorize_error(error_msg, language):
-    """Categorize error message into hallucination subcategory."""
     if language in ["python", "python3"]:
         error_patterns = programming_halus_python
     elif language == "cpp":
@@ -305,11 +288,6 @@ def categorize_error(error_msg, language):
 
 
 def calculate_category_rates(errors_dict, total):
-    """Aggregate error subcategories directly into the 4 main hallucination categories.
-
-    Takes the raw errors_dict (subcategory -> count) and total sample count,
-    returns dict mapping each main category to {'count': int, 'percentage': float}.
-    """
     category_counts = {cat: 0 for cat in MAIN_CATEGORIES}
 
     for error_type, count in errors_dict.items():
@@ -327,24 +305,17 @@ def calculate_category_rates(errors_dict, total):
     }
 
 
-# =========================
-# Normalization utilities
-# =========================
-
 def minmax_norm(x, xmin, xmax):
-    """Normalize value to [0, 1] range."""
     if xmax == xmin:
         return 0.0
     return float(np.clip((x - xmin) / (xmax - xmin), 0.0, 1.0))
 
 
 def harmonic_mean(a, b, eps=1e-8):
-    """Calculate harmonic mean of two values."""
     return float(2.0 / (1.0 / (a + eps) + 1.0 / (b + eps)))
 
 
 def weighted_softmax_complexity(cyc, cog):
-    """Weighted combination of complexity metrics."""
     if cyc == 0.0 and cog == 0.0:
         return 0.0
     exp_cyc = np.exp(cyc ** 2)
@@ -355,17 +326,14 @@ def weighted_softmax_complexity(cyc, cog):
 
 
 def logic_severity(cyc, cog, pass_rate):
-    """Calculate logic hallucination severity score."""
     return 0.5 * (weighted_softmax_complexity(cyc, cog) + (1 - pass_rate))
 
 
-# =========================
-# Compilation utilities
-# =========================
-
 def strip_markdown_code_fences(code, language):
-    """Remove markdown code fences from code if present."""
-    code = code.strip()
+    if code is None or (isinstance(code, float) and pd.isna(code)):
+        return ""
+    
+    code = str(code).strip()
 
     patterns = [
         f"```{language}\n",
@@ -392,7 +360,6 @@ def strip_markdown_code_fences(code, language):
 
 
 def compile_code(language, code, workdir):
-    """Compile code and return command to execute it."""
     code = strip_markdown_code_fences(code, language)
     if language in ["python", "python3"]:
         src = os.path.join(workdir, "main.py")
@@ -437,12 +404,7 @@ def compile_code(language, code, workdir):
     raise ValueError(f"Unsupported language: {language}")
 
 
-# =========================
-# Execution with profiling
-# =========================
-
 def run_with_profiling(cmd, input_str="", timeout=5, workdir=None):
-    """Execute command and profile time and memory usage."""
     try:
         proc = psutil.Popen(
             cmd,
@@ -495,16 +457,7 @@ def run_with_profiling(cmd, input_str="", timeout=5, workdir=None):
             pass
         raise RuntimeError(f"Execution error: {e}")
 
-
-# =========================
-# Test case evaluation
-# =========================
-
 def test_case_pass_rate(language, code, test_cases, workdir):
-    """
-    Test all test cases and return pass statistics.
-    Returns: (passed_count: int, total_count: int, errors_dict: dict)
-    """
     if not test_cases:
         return 0, 0, {}
 
@@ -519,14 +472,20 @@ def test_case_pass_rate(language, code, test_cases, workdir):
                 out, t, m, rc, stderr = run_with_profiling(
                     cmd, 
                     tc["input"], 
-                    timeout=10, 
-                    #workdir=tmp if language == "java" else None
+                    timeout=10,
                     workdir=workdir if language == "java" else None
-                    )
+                )
+                expected_output = tc.get("output", "")
+                if pd.isna(expected_output):
+                    expected_output = ""
+                else:
+                    expected_output = str(expected_output).strip()
+                actual_output = "" if pd.isna(out) else str(out).strip() 
+
                 if rc != 0:
                     error_name = categorize_error(stderr, language)
                     errors_dict[error_name] = errors_dict.get(error_name, 0) + 1
-                elif out == tc["output"].strip():
+                elif actual_output == expected_output:
                     passed_count += 1
                 else:
                     error_name = "Logic_Deviation"
@@ -544,17 +503,7 @@ def test_case_pass_rate(language, code, test_cases, workdir):
 
     return passed_count, total_count, errors_dict
 
-
-# =========================
-# Cyclomatic Complexity
-# =========================
-
 def _tree_sitter_cyclomatic_complexity(code: str, language: str) -> float:
-    """Calculate cyclomatic complexity using tree-sitter for Java/C++.
-
-    CC per function = 1 + number of decision points (if, for, while, do,
-    case, catch, &&, ||, ternary).
-    """
     if not TREE_SITTER_AVAILABLE:
         logger.warning("tree-sitter not available for cyclomatic complexity")
         return 1.0
@@ -605,7 +554,6 @@ def _tree_sitter_cyclomatic_complexity(code: str, language: str) -> float:
                 for child in node.children:
                     if child.type in {"&&", "||"}:
                         count += 1
-                        # break
             for child in node.children:
                 if child.type not in fn:
                     count += count_decisions(child)
@@ -656,16 +604,7 @@ def cyclomatic_complexity(code: str, language: str) -> float:
     logger.warning(f"Unsupported language for cyclomatic complexity: {language}")
     return 1.0
 
-
-# =========================
-# Cognitive Complexity
-# =========================
-
 def _get_logical_operators(node, code_bytes: bytes, language: str) -> List[str]:
-    """
-    Extract all logical operators (&&, ||) from a condition in source order
-    using in-order traversal of binary expressions.
-    """
     ops = []
 
     def visit(n):
@@ -746,12 +685,7 @@ def _count_boolean_operator_complexity(node, code_bytes: bytes, language: str) -
 
 
 def _is_else_if(node, language: str) -> bool:
-    """Check if this if_statement is part of an else-if chain.
 
-    In Java, tree-sitter makes the inner if_statement a direct child of the
-    outer if_statement (via the 'alternative' field).  In C++, the inner
-    if_statement is a child of an else_clause node.
-    """
     if node.type != "if_statement":
         return False
 
@@ -771,11 +705,7 @@ def _is_else_if(node, language: str) -> bool:
 
 
 def _else_is_part_of_else_if(node, language: str) -> bool:
-    """Check if this else/else_clause is followed by an if (else-if chain).
 
-    When true, the else node itself should NOT get a +1 increment — the
-    child if_statement (detected as else-if by _is_else_if) carries the +1.
-    """
     if language == "java" and node.type == "else":
         parent = node.parent
         if parent and parent.type == "if_statement":
@@ -978,349 +908,312 @@ def cognitive_complexity(code: str, language: str) -> float:
     return 0.0
 
 
+def compute_chi_multi_model(csv_path):
+    df = pd.read_csv(csv_path)
 
-# =========================
-# Main CHI computation
-# =========================
+    required_cols = ["model_name", "language", "code", "test_cases"]
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column: {col}")
 
-def compute_chi(csv_path):
-    """Calculate Code Hallucination Index from dataset."""
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        raise RuntimeError(f"Failed to read CSV: {e}")
-
-    required_cols = ["language", "code", "test_cases"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns: {missing_cols}")
-
-    N = len(df)
-    if N == 0:
-        raise ValueError("CSV file is empty")
-
-    print(f"Processing {N} code samples...\n")
-
-    pM_count = pN_count = pR_count = pL_count = 0
-    syntax_error_count = time_error_count = unknown_error_count = 0
-
-    times = []
-    memories = []
-    cyc_vals = []
-    cog_vals = []
+    print(f"Processing {len(df)} total samples across models...\n")
 
     sample_records = []
-
-    language_stats = {}
     overall_errors_dict = {}
 
-    for sample_num, (idx, row) in enumerate(df.iterrows(), start=1):
-        print(f"Processing sample {sample_num}/{N}...")
-
+    for idx, row in df.iterrows():
+        sample_id = idx + 1
+        model = row["model_name"]
         language = row["language"].lower()
         code = strip_markdown_code_fences(row["code"], language)
 
-        if language not in language_stats:
-            language_stats[language] = {
-                'total': 0, 'pM_count': 0, 'pN_count': 0, 'pR_count': 0, 'pL_count': 0,
-                'syntax_error_count': 0, 'time_error_count': 0, 'unknown_error_count': 0,
-                'passed': 0, 'tcpr_sum': 0.0
-            }
+        print("\n" + "-"*80)
+        print(f"[Sample {sample_id}/{len(df)}]")
+        print(f"Model: {model} | Language: {language}")
 
         try:
             test_cases = json.loads(row["test_cases"])
-        except Exception as e:
-            print(f"  Warning: Invalid test_cases JSON: {e}")
+        except:
             test_cases = []
 
         sample_error_types = set()
+        t, m = 0.0, 0.0
 
-        t = 0
-        m = 0
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 cmd = compile_code(language, code, tmp)
+
                 if test_cases:
-                    test_input = test_cases[0]["input"]
-      
                     out, t, m, rc, stderr = run_with_profiling(
-                        cmd, 
-                        test_input, 
-                        timeout=10, 
+                        cmd,
+                        test_cases[0].get("input", ""),
+                        timeout=10,
                         workdir=tmp if language == "java" else None
                     )
-                    print(f"  Resources: {t:.3f}s, {m:.2f}MB")
+
+                    print(f"Execution Time: {t:.4f}s | Memory: {m:.2f} MB")
 
                     if rc != 0:
-                        error_name = categorize_error(stderr, language)
-                        sample_error_types.add(error_name)
+                        err = categorize_error(stderr, language)
+                        sample_error_types.add(err)
+                        print(f"Runtime Error Detected: {err}")
+                    else: 
+                        print("Execution Success")
 
-                else: 
-                    print("  Warning: No test cases — skipping resource profiling.")
-                    t, m = 0.0, 0.0
         except Exception as e:
-            print(f"  Warning: Resource profiling failed: {e}")
-            error_name = categorize_error(str(e), language)
-            sample_error_types.add(error_name)
-        
-        times.append(t)
-        memories.append(m)
+            err = categorize_error(str(e), language)
+            sample_error_types.add(err)
+            print(f"Compilation/Execution Failed: {err}")
+            print(f"Error Details: {str(e)}")
 
-        cyc_raw = cyclomatic_complexity(code, language)
-        cog_raw = cognitive_complexity(code, language)
+        cyc = cyclomatic_complexity(code, language)
+        cog = cognitive_complexity(code, language)
 
-        cyc_vals.append(cyc_raw)
-        cog_vals.append(cog_raw)
+        print(f"Cyclomatic Complexity: {cyc}")
+        print(f"Cognitive Complexity: {cog}")
 
         try:
             with tempfile.TemporaryDirectory() as tmp:
+                passed, total, errors_dict = test_case_pass_rate(
+                    language, code, test_cases, tmp
+                )
 
-                passed_count, total_count, errors_dict = test_case_pass_rate(language, code, test_cases, tmp)
+                for e in errors_dict:
+                    sample_error_types.add(e)
 
-                for err_name in errors_dict.keys():
-                    sample_error_types.add(err_name)
+                tcpr = passed / total if total > 0 else 0.0
 
-                language_stats[language]['total'] += 1
-                language_stats[language]['passed'] += (1 if passed_count == total_count else 0)
+                print(f"Test Cases Passed: {passed}/{total} | TCPR: {tcpr:.2f}")
 
-                sample_tcpr = passed_count / total_count if total_count > 0 else 0.0
-                language_stats[language]['tcpr_sum'] += sample_tcpr
+                if errors_dict:
+                    print("Detected Hallucinations:")
+                    for err_type, count in errors_dict.items():
+                        print(f"  - {err_type}: {count}")
 
-                
-                print(f"  Logic: Passed {passed_count}/{total_count} test cases, Complexity (cyc={cyc_raw:.3f}, cog={cog_raw:.3f})")
         except Exception as e:
-            print(f"  Warning: Logic analysis failed: {e}")
-            error_name = categorize_error(str(e), language)
-            sample_error_types.add(error_name)
-            language_stats[language]['total'] += 1
-            sample_tcpr = 0.0
-            
+            tcpr = 0.0
+            err = categorize_error(str(e), language)
+            sample_error_types.add(err)
+            print(f"Test Execution Failed: {err}")
+            print(f"Error Details: {str(e)}")
 
+        if sample_error_types:
+            print(f"Final Hallucination Types: {list(sample_error_types)}")
+        else:
+            print("No Hallucinations Detected")
+            
         sample_records.append({
+            "model": model,
             "language": language,
-            "cyc": cyc_raw,
-            "cog": cog_raw,
-            "tcpr": sample_tcpr,
+            "time": t,
+            "memory": m,
+            "cyc": cyc,
+            "cog": cog,
+            "tcpr": tcpr,
             "errors": sample_error_types
         })
 
-        if sample_error_types:
-            print(f"  Hallucination type(s): {', '.join(str(e) for e in sample_error_types)}")
-            sample_has_mapping = False
-            sample_has_naming = False
-            sample_has_resource = False
-            sample_has_logical = False
-            sample_has_syntax = False
-            sample_has_time = False
-            sample_has_unknown = False
+        for e in sample_error_types:
+            overall_errors_dict[e] = overall_errors_dict.get(e, 0) + 1
 
-            for error_type in sample_error_types:
-                if error_type in HALLUCINATION_CATEGORIES.get('Mapping_Hallucination', []):
-                    sample_has_mapping = True
-                elif error_type in HALLUCINATION_CATEGORIES.get('Naming_Hallucination', []):
-                    sample_has_naming = True
-                elif error_type in HALLUCINATION_CATEGORIES.get('Resource_Hallucination', []):
-                    sample_has_resource = True
-                elif error_type in HALLUCINATION_CATEGORIES.get('Logical_Hallucination', []):
-                    sample_has_logical = True
-                elif error_type == 'Syntax_Error':
-                    sample_has_syntax = True
-                elif error_type == 'TimeError':
-                    sample_has_time = True
-                else:
-                    sample_has_unknown = True
-
-            if sample_has_mapping:
-                pM_count += 1
-                language_stats[language]['pM_count'] += 1
-            if sample_has_naming:
-                pN_count += 1
-                language_stats[language]['pN_count'] += 1
-            if sample_has_resource:
-                pR_count += 1
-                language_stats[language]['pR_count'] += 1
-            if sample_has_logical:
-                pL_count += 1
-                language_stats[language]['pL_count'] += 1
-            if sample_has_syntax:
-                syntax_error_count += 1
-                language_stats[language]['syntax_error_count'] += 1
-            if sample_has_time:
-                time_error_count += 1
-                language_stats[language]['time_error_count'] += 1
-            if sample_has_unknown:
-                unknown_error_count += 1
-                language_stats[language]['unknown_error_count'] += 1
-
-            for error_type in sample_error_types:
-                overall_errors_dict[error_type] = overall_errors_dict.get(error_type, 0) + 1
-
-        print()
-
+    times = [r["time"] for r in sample_records]
+    memories = [r["memory"] for r in sample_records]
+    cyc_vals = [r["cyc"] for r in sample_records]
+    cog_vals = [r["cog"] for r in sample_records]
 
     t_min, t_max = min(times), max(times)
     m_min, m_max = min(memories), max(memories)
     cyc_min, cyc_max = min(cyc_vals), max(cyc_vals)
     cog_min, cog_max = min(cog_vals), max(cog_vals)
 
-    print("samples recorded:", len(sample_records))
-    print("expected samples:", N)
-    S_vals, Q_vals_passed, Q_vals_failed = [], [], []
+    print("\nGlobal normalization ranges:")
+    print(f"Time: {t_min:.4f} → {t_max:.4f}")
+    print(f"Memory: {m_min:.4f} → {m_max:.4f}")
+    print(f"Cyclomatic: {cyc_min:.4f} → {cyc_max:.4f}")
+    print(f"Cognitive: {cog_min:.4f} → {cog_max:.4f}")
 
-    for i, rec in enumerate(sample_records):
+    model_groups = defaultdict(list)
+    for r in sample_records:
+        model_groups[r["model"]].append(r)
 
-        t_n = minmax_norm(times[i], t_min, t_max)
-        m_n = minmax_norm(memories[i], m_min, m_max)
+    model_results = {}
+    model_language_stats = defaultdict(lambda: defaultdict(lambda: {
+        "total": 0,
+        "passed": 0,
+        "tcpr_sum": 0.0,
+        "pM_count": 0,
+        "pN_count": 0,
+        "pR_count": 0,
+        "pL_count": 0,
+        "syntax_error_count": 0,
+        "time_error_count": 0,
+        "unknown_error_count": 0,
+    }))
 
-        s_val = harmonic_mean(t_n, m_n)
-        S_vals.append(s_val)
+    for model, records in model_groups.items():
+        N = len(records)
 
-        cyc_n = minmax_norm(rec["cyc"], cyc_min, cyc_max)
-        cog_n = minmax_norm(rec["cog"], cog_min, cog_max)
+        pM = pN = pR = pL = 0
+        S_vals = []
+        Q_pass = []
+        Q_fail = []
 
-        q_val = logic_severity(cyc_n, cog_n, rec["tcpr"])
+        for r in records:
+            t_n = minmax_norm(r["time"], t_min, t_max)
+            m_n = minmax_norm(r["memory"], m_min, m_max)
+            S_vals.append(0.5 * (t_n + m_n))
 
-        if rec["tcpr"] == 1.0:
-            Q_vals_passed.append(q_val)
-        else:
-            Q_vals_failed.append(q_val)
+            cyc_n = minmax_norm(r["cyc"], cyc_min, cyc_max)
+            cog_n = minmax_norm(r["cog"], cog_min, cog_max)
 
-    pM = pM_count / N if N > 0 else 0
-    pN = pN_count / N if N > 0 else 0
-    pR = pR_count / N if N > 0 else 0
-    pL = pL_count / N if N > 0 else 0
-    syntax_error_rate = syntax_error_count / N if N > 0 else 0
-    time_error_rate = time_error_count / N if N > 0 else 0
-    unknown_error_rate = unknown_error_count / N if N > 0 else 0
+            q_val = logic_severity(cyc_n, cog_n, r["tcpr"])
 
-    lambda_ = 1.0
+            if r["tcpr"] == 1.0:
+                Q_pass.append(q_val)
+            else:
+                Q_fail.append(q_val)
 
-    Hm = pM
-    Hn = pN
+            errs = r["errors"]
 
-    HR = pR * (1 + lambda_ * np.mean(S_vals)) if N > 0 else 0
+            if any(e in HALLUCINATION_CATEGORIES['Mapping_Hallucination'] for e in errs):
+                pM += 1
+            if any(e in HALLUCINATION_CATEGORIES['Naming_Hallucination'] for e in errs):
+                pN += 1
+            if any(e in HALLUCINATION_CATEGORIES['Resource_Hallucination'] for e in errs):
+                pR += 1
+            if any(e in HALLUCINATION_CATEGORIES['Logical_Hallucination'] for e in errs):
+                pL += 1
 
+            lang = r["language"]
+            lang_stats = model_language_stats[model][lang]
+            lang_stats["total"] += 1
+            lang_stats["tcpr_sum"] += r["tcpr"]
+            if r["tcpr"] == 1.0:
+                lang_stats["passed"] += 1
 
-    Q_val = Q_vals_failed + Q_vals_passed
-    HL = pL *(1 + lambda_* np.mean(Q_val)) if N > 0 else 0
+            if any(e in HALLUCINATION_CATEGORIES['Mapping_Hallucination'] for e in errs):
+                lang_stats["pM_count"] += 1
+            if any(e in HALLUCINATION_CATEGORIES['Naming_Hallucination'] for e in errs):
+                lang_stats["pN_count"] += 1
+            if any(e in HALLUCINATION_CATEGORIES['Resource_Hallucination'] for e in errs):
+                lang_stats["pR_count"] += 1
+            if any(e in HALLUCINATION_CATEGORIES['Logical_Hallucination'] for e in errs):
+                lang_stats["pL_count"] += 1
+            if 'Syntax_Error' in errs:
+                lang_stats["syntax_error_count"] += 1
+            if 'TimeError' in errs:
+                lang_stats["time_error_count"] += 1
 
-    CHI = 0.25 * (Hm + Hn + HR + HL)
+            categorized_errors = set(
+                HALLUCINATION_CATEGORIES['Mapping_Hallucination']
+                + HALLUCINATION_CATEGORIES['Naming_Hallucination']
+                + HALLUCINATION_CATEGORIES['Resource_Hallucination']
+                + HALLUCINATION_CATEGORIES['Logical_Hallucination']
+                + HALLUCINATION_CATEGORIES['Syntax_Error']
+                + HALLUCINATION_CATEGORIES['TimeError']
+            )
+            if any(e not in categorized_errors for e in errs):
+                lang_stats["unknown_error_count"] += 1
 
+        pM /= N
+        pN /= N
+        pR /= N
+        pL /= N
 
-    language_hallucination_stats = {}
-    for lang, stats in language_stats.items():
-        total = stats['total']
-        if total > 0:
-            tcpr = stats['tcpr_sum'] / total
-            language_hallucination_stats[lang] = {
-                'total_problems': total,
-                'passed_problems': stats['passed'],
-                'pass_rate': round(stats['passed'] / total * 100, 2),
-                'tcpr': round(tcpr * 100, 2),
-                'pM': stats['pM_count'] / total,
-                'pN': stats['pN_count'] / total,
-                'pR': stats['pR_count'] / total,
-                'pL': stats['pL_count'] / total,
-                'syntax_error_count': stats['syntax_error_count'],
-                'syntax_error_rate': stats['syntax_error_count'] / total,
-                'time_error_count': stats['time_error_count'],
-                'time_error_rate': stats['time_error_count'] / total,
-                'unknown_error_count': stats['unknown_error_count'],
-                'unknown_error_rate': stats['unknown_error_count'] / total,
-            }
+        lambda_ = 1.0
 
+        Hm = pM
+        Hn = pN
+        HR = pR + lambda_ * np.mean(S_vals)
 
-    overall_category_rates = calculate_category_rates(overall_errors_dict, N)
+        Q_bar_fail = np.mean(Q_fail) if Q_fail else 0.0
+        Q_bar_pass = np.mean(Q_pass) if Q_pass else 0.0
 
+        HL = (pL * Q_bar_fail + (1 - pL) * Q_bar_pass)
 
-    overall_tcpr_sum = sum(stats['tcpr_sum'] for stats in language_stats.values())
-    overall_passed = sum(stats['passed'] for stats in language_stats.values())
-    overall_tcpr = overall_tcpr_sum / N if N > 0 else 0.0
+        CHI = 0.25 * (Hm + Hn + HR + HL)
+
+        model_results[model] = {
+            "CHI": round(CHI, 4),
+            "H_mapping": round(Hm, 4),
+            "H_naming": round(Hn, 4),
+            "H_resource": round(HR, 4),
+            "H_logic": round(HL, 4),
+        }
+
+    # -----------------------------
+    # FORMAT LANGUAGE STATS
+    # -----------------------------
+    for model in model_language_stats:
+        for lang in model_language_stats[model]:
+            stats = model_language_stats[model][lang]
+            total = stats["total"]
+
+            stats["pass_rate"] = round(stats["passed"] / total * 100, 2) if total else 0
+            stats["tcpr"] = round(stats["tcpr_sum"] / total * 100, 2) if total else 0
+            stats["pM"] = round(stats["pM_count"] / total, 4) if total else 0
+            stats["pN"] = round(stats["pN_count"] / total, 4) if total else 0
+            stats["pR"] = round(stats["pR_count"] / total, 4) if total else 0
+            stats["pL"] = round(stats["pL_count"] / total, 4) if total else 0
+            stats["syntax_error_rate"] = round(stats["syntax_error_count"] / total, 4) if total else 0
+            stats["time_error_rate"] = round(stats["time_error_count"] / total, 4) if total else 0
+            stats["unknown_error_rate"] = round(stats["unknown_error_count"] / total, 4) if total else 0
 
     return {
-        "H_mapping": Hm,
-        "H_rate_mapping": pM,
-        "H_naming": Hn,
-        "H_rate_naming": pN,
-        "H_resource": HR,
-        "H_rate_resource": pR,
-        "H_logic": HL,
-        "H_rate_logic": pL,
-        "syntax_error_count": syntax_error_count,
-        "syntax_error_rate": syntax_error_rate,
-        "time_error_count": time_error_count,
-        "time_error_rate": time_error_rate,
-        "unknown_error_count": unknown_error_count,
-        "unknown_error_rate": unknown_error_rate,
-        "CHI": CHI,
-        "language_hallucination_stats": language_hallucination_stats,
-        "overall_category_rates": overall_category_rates,
-        "overall_pass_rate": round(overall_passed / N * 100, 2) if N > 0 else 0,
-        "overall_tcpr": round(overall_tcpr * 100, 2)
+        "global_normalization": {
+            "time": (t_min, t_max),
+            "memory": (m_min, m_max),
+            "cyc": (cyc_min, cyc_max),
+            "cog": (cog_min, cog_max),
+        },
+        "models": model_results,
+        "language_stats": model_language_stats
     }
 
 
-# =========================
-# CLI entry
-# =========================
+# =========================================================
+# CLI
+# =========================================================
 
 if __name__ == "__main__":
+    import sys
+
     if len(sys.argv) != 2:
-        print("Usage: python chi_script_updated.py data.csv")
-        print("\nExpected CSV columns:")
-        print("  - language: 'python', 'cpp', or 'java'")
-        print("  - code: source code string")
-        print("  - test_cases: JSON array of [{\"input\": \"...\", \"output\": \"...\"}]")
+        print("Usage: python chi_multi.py data.csv")
         sys.exit(1)
 
-    try:
-        results = compute_chi(sys.argv[1])
-        print("\n" + "=" * 50)
-        print("CHI RESULTS:")
-        print("=" * 50)
-        print(f"H_mapping (Hm): {results['H_mapping']:.4f}")
-        print(f"  Rate (pM): {results['H_rate_mapping']:.4f} ({results['H_rate_mapping'] * 100:.2f}%)")
-        print(f"H_naming (Hn): {results['H_naming']:.4f}")
-        print(f"  Rate (pN): {results['H_rate_naming']:.4f} ({results['H_rate_naming'] * 100:.2f}%)")
-        print(f"H_resource (HR): {results['H_resource']:.4f}")
-        print(f"  Rate (pR): {results['H_rate_resource']:.4f} ({results['H_rate_resource'] * 100:.2f}%)")
-        print(f"H_logic (HL): {results['H_logic']:.4f}")
-        print(f"  Rate (pL): {results['H_rate_logic']:.4f} ({results['H_rate_logic'] * 100:.2f}%)")
-        print(f"\nSyntax Errors: {results['syntax_error_count']} samples ({results['syntax_error_rate'] * 100:.2f}%)")
-        print(f"Time Errors: {results['time_error_count']} samples ({results['time_error_rate'] * 100:.2f}%)")
-        print(f"Unknown Errors: {results['unknown_error_count']} samples ({results['unknown_error_rate'] * 100:.2f}%)")
-        print(f"\nCHI: {results['CHI']:.4f}")
+    results = compute_chi_multi_model(sys.argv[1])
 
-        print("\n" + "=" * 50)
-        print("OVERALL HALLUCINATION BREAKDOWN (4 Main Categories):")
-        print("=" * 50)
-        print(f"Overall Pass Rate (All tests passed): {results['overall_pass_rate']:.2f}%")
-        print(f"Overall TCPR (Average test case pass rate): {results['overall_tcpr']:.2f}%")
-        print("\nMain Categories:")
-        for category, data in sorted(results['overall_category_rates'].items()):
-            print(f"  {category}: {data['count']} samples ({data['percentage']:.2f}%)")
+    print("\n" + "="*60)
+    print("MODEL-WISE CHI RESULTS")
+    print("="*60)
 
-        print("\n" + "=" * 50)
-        print("LANGUAGE-WISE HALLUCINATION BREAKDOWN:")
-        print("=" * 50)
-        for lang, stats in sorted(results['language_hallucination_stats'].items()):
-            print(f"\nLanguage: {lang.upper()}")
-            print(f"  Total Problems: {stats['total_problems']}")
-            print(f"  Passed Problems (all tests): {stats['passed_problems']}")
-            print(f"  Pass Rate (all tests passed): {stats['pass_rate']:.2f}%")
-            print(f"  TCPR (average test case pass rate): {stats['tcpr']:.2f}%")
+    for model, stats in results["models"].items():
+        print(f"\nModel: {model}")
+        print(f"  CHI: {stats['CHI']}")
+        print(f"  H_mapping: {stats['H_mapping']}")
+        print(f"  H_naming: {stats['H_naming']}")
+        print(f"  H_resource: {stats['H_resource']}")
+        print(f"  H_logic: {stats['H_logic']}")
 
-            print(f"\n  Hallucination Rates:")
-            print(f"    pM (Mapping): {stats['pM']:.4f} ({stats['pM'] * 100:.2f}%)")
-            print(f"    pN (Naming): {stats['pN']:.4f} ({stats['pN'] * 100:.2f}%)")
-            print(f"    pR (Resource): {stats['pR']:.4f} ({stats['pR'] * 100:.2f}%)")
-            print(f"    pL (Logic): {stats['pL']:.4f} ({stats['pL'] * 100:.2f}%)")
-            print(f"\n    Syntax Errors: {stats['syntax_error_count']} samples ({stats['syntax_error_rate'] * 100:.2f}%)")
-            print(f"    Time Errors: {stats['time_error_count']} samples ({stats['time_error_rate'] * 100:.2f}%)")
-            print(f"    Unknown Errors: {stats['unknown_error_count']} samples ({stats['unknown_error_rate'] * 100:.2f}%)")
-    except Exception as e:
-        print(f"\nError: {e}", file=sys.stderr)
-        import traceback
+    print("\n" + "="*60)
+    print("LANGUAGE-WISE STATS PER MODEL")
+    print("="*60)
 
-        traceback.print_exc()
-        sys.exit(1)
+    for model, langs in results["language_stats"].items():
+        print(f"\nModel: {model}")
+        for lang, stats in langs.items():
+            print(f"  {lang}: Pass Rate={stats['pass_rate']}%, TCPR={stats['tcpr']}%")
+            print(
+                f"    Hallucination Rates -> "
+                f"pM={stats['pM']:.4f} ({stats['pM'] * 100:.2f}%), "
+                f"pN={stats['pN']:.4f} ({stats['pN'] * 100:.2f}%), "
+                f"pR={stats['pR']:.4f} ({stats['pR'] * 100:.2f}%), "
+                f"pL={stats['pL']:.4f} ({stats['pL'] * 100:.2f}%)"
+            )
+            print(
+                f"    Errors -> "
+                f"Syntax={stats['syntax_error_count']} ({stats['syntax_error_rate'] * 100:.2f}%), "
+                f"Time={stats['time_error_count']} ({stats['time_error_rate'] * 100:.2f}%), "
+                f"Unknown={stats['unknown_error_count']} ({stats['unknown_error_rate'] * 100:.2f}%)"
+            )

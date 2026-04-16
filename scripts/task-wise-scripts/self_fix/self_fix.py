@@ -19,6 +19,7 @@ flash_attn_module.flash_attn_func = None
 flash_attn_module.flash_attn_varlen_func = None
 flash_attn_spec = importlib.util.spec_from_loader('flash_attn', loader=None)
 flash_attn_module.__spec__ = flash_attn_spec
+flash_attn_module.__version__ = "2.0.0"  # Mock version
 sys.modules['flash_attn'] = flash_attn_module
 sys.modules['flash_attn.flash_attn_interface'] = flash_attn_module
 
@@ -124,7 +125,7 @@ def run_model(messages, model, tokenizer, device):
         gc.collect()
         torch.cuda.empty_cache()
     except:
-        pass  
+        pass  # GPU might be in bad state from previous error
 
     max_position_embeddings = getattr(model.config, "max_position_embeddings", 16384)
     max_input_length = min(max_position_embeddings - 1024, 8192)
@@ -146,13 +147,12 @@ def run_model(messages, model, tokenizer, device):
         if torch.any(inputs >= vocab_size) or torch.any(inputs < 0):
             print(f"   > Warning: Token IDs out of range detected. Clamping to valid range [0, {vocab_size-1}]")
             inputs = torch.clamp(inputs, 0, vocab_size - 1)
-  
+        
         if hasattr(tokenizer, 'bos_token_id') and tokenizer.bos_token_id is not None:
             if tokenizer.bos_token_id >= vocab_size:
                 print(f"   > Warning: bos_token_id ({tokenizer.bos_token_id}) exceeds vocab size ({vocab_size})")
                 tokenizer.bos_token_id = tokenizer.eos_token_id
         
-
         try:
             inputs = inputs.to(device)
         except RuntimeError as cuda_err:
@@ -165,7 +165,6 @@ def run_model(messages, model, tokenizer, device):
     except Exception as e:
         error_msg = str(e)
         print(f"   > Error tokenizing input: {error_msg}")
-
         if "CUDA" in error_msg.upper() or "assert" in error_msg.lower():
             print(f"   > CUDA error detected during tokenization. Exiting for fresh restart.")
             sys.exit(1)
@@ -324,17 +323,15 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
             device_map="auto",
             low_cpu_mem_usage=True,
             use_cache=True,
-            attn_implementation="eager"  
+            attn_implementation="eager"  # Use eager attention (no flash-attn required)
         )
-
         device = torch.device("cuda:0")
         print(f"Model loaded successfully. Device map:")
         for name, param in model.named_parameters():
             if param.device.type == 'cuda':
                 print(f"  Layer {name[:50]}: {param.device}")
-                break  
+                break  # Just print first layer to confirm splitting
         print(f"  ... (model sharded across GPUs)")
-        
         for i in range(torch.cuda.device_count()):
             mem_allocated = torch.cuda.memory_allocated(i) / 1024**3
             mem_reserved = torch.cuda.memory_reserved(i) / 1024**3
@@ -352,13 +349,13 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
             device_map={"": gpu_id},
             low_cpu_mem_usage=True,
             use_cache=True,
-            attn_implementation="eager"  
+            attn_implementation="eager"  # Use eager attention (no flash-attn required)
         )
 
     model.eval()
+
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
-    
     
     vocab_size = len(tokenizer)
     print(f"Tokenizer vocab size: {vocab_size}")
@@ -371,17 +368,15 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
                 print(f"  Setting {token_name} to eos_token_id={tokenizer.eos_token_id}")
                 setattr(tokenizer, token_name, tokenizer.eos_token_id)
             else:
-                print(f"  {token_name}: {token_id} ✓")
-
+                print(f"  {token_name}: {token_id} âœ“")
 
     try:
         torch.cuda.synchronize()
-
         test_tensor = torch.tensor([1.0], device=device)
         _ = test_tensor * 2
         del test_tensor
         torch.cuda.empty_cache()
-        print("CUDA device check: ✓")
+        print("CUDA device check: âœ“")
     except Exception as e:
         print(f"ERROR: CUDA device check failed: {e}")
         print("GPU state may be corrupted. Please restart the script.")
@@ -409,14 +404,12 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
         question_output_dir = os.path.join(output_dir, dp_name)
         os.makedirs(question_output_dir, exist_ok=True)
 
-
         history_file = os.path.join(question_output_dir, "history.json")
         if os.path.exists(history_file):
             try:
                 with open(history_file, 'r') as f:
                     existing_data = json.load(f)
                     existing_history = existing_data.get("history", [])
-
                     valid_attempts = sum(1 for attempt in existing_history 
                                         if attempt.get("code") and len(attempt.get("code", "").strip()) > 0)
                     if valid_attempts >= 5:
@@ -424,7 +417,8 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
                         successful_dps += 1
                         continue
             except:
-                pass
+                pass  # If can't read, proceed with processing
+
         history_log = []
 
         system_prompt = "You are an expert programmer. You will be given a coding problem. Output only the code, with no explanations or comments."
@@ -447,10 +441,8 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
 
             generated_code = run_model(messages, model, tokenizer, device)
             
-            
             if not generated_code or len(generated_code.strip()) == 0:
                 print(f"   > Failed to generate code for {dp_name} on attempt {attempt+1}. Skipping datapoint.")
-                
                 break
 
             pass_rate, passed, total, feedback = evaluate_solution(generated_code, language, io_data)
@@ -475,7 +467,6 @@ def process_folder(base_folder, language, model_id, output_dir="./outputs", gpu_
 
             messages.append({"role": "assistant", "content": generated_code})
             messages.append({"role": "user", "content": f"USER_FEEDBACK: {feedback}"})
-
 
         if len(history_log) == 5:
             with open(os.path.join(question_output_dir, "history.json"), "w") as f:

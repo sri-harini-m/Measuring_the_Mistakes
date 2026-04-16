@@ -64,7 +64,6 @@ IMPORTANT: The input contains a single file. You must output exactly ONE file wi
 ADDITIONAL_INSTRUCTIONS_TEMPLATE: Final[str] = """Additional code-specific refactoring instructions/hints:
 {instructions}
 
-"""
 
 DEFAULT_PROVIDER: Final[str] = "huggingface"
 DEFAULT_MODEL: Final[str] = "qwen3-coder_16k"

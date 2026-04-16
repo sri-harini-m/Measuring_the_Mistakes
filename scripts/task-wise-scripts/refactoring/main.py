@@ -196,7 +196,6 @@ Environment Variables:
   ANTHROPIC_API_KEY:   Required for Claude provider
   OPENAI_API_KEY:      Required for OpenAI provider
   HUGGINGFACE_API_KEY: Optional for HuggingFace API mode
-""")
     parser.add_argument('--dataset', '-d', default=DEFAULT_DATASET, choices=list(SUPPORTED_DATASETS),
         help=f'Dataset type (default: {DEFAULT_DATASET})')
     parser.add_argument('--input', '-i', help='Input directory (defaults based on dataset type if not specified)')
