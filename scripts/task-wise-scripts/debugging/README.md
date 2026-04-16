@@ -18,3 +18,11 @@
    - Scripts read from `processed_dataset/verified_{language}_dataset.jsonl`.
    - Progress is saved to checkpoint files, and final outputs are saved to provider/model-specific results JSON files.
    - Re-running a script resumes automatically from the saved checkpoint when available.
+
+5. To create a combined CHI CSV for debugging outputs, run:
+   - `python create_chi_csv.py`
+
+6. CSV combine behavior for `create_chi_csv.py`:
+   - It reads model outputs from `close_source/` and `open_source/`.
+   - It joins those outputs with dataset files from `processed_dataset/`.
+   - It writes the combined file to `chi_csv/all_models_chi.csv`.
